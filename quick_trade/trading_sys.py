@@ -16,29 +16,13 @@ Trading project:
 #   add quick_trade tuner (as keras-tuner)
 #   connect the FTX
 
-import itertools
-import random
 import time
 import typing
 from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
-import ta
-import ta.momentum
-import ta.others
-import ta.trend
-import ta.volatility
-import ta.volume
-import talib
-from plotly.graph_objs import Line
-from plotly.subplots import make_subplots
-from pykalman import KalmanFilter
 from quick_trade import utils
-from scipy import signal
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.layers import Dropout, Dense, LSTM
-from tensorflow.keras.models import Sequential, load_model
 import quick_trade.brokers as brokers
 
 
@@ -69,7 +53,6 @@ class Trader(object):
     stop_loss: float
     take_profit: float
     open_price: float
-    scaler: MinMaxScaler
     history: Dict[str, List[float]]
     training_set: Tuple[np.ndarray, np.ndarray]
     trades: int = 0
@@ -89,7 +72,6 @@ class Trader(object):
     client: brokers.TradingClient
     __last_stop_loss: float
     __last_take_profit: float
-    model: Sequential
     returns_strategy: List[float]
 
     def __init__(self,
@@ -154,46 +136,6 @@ class Trader(object):
     @classmethod
     def _get_this_instance(cls, *args, **kwargs):
         return cls(*args, **kwargs)
-
-    def kalman_filter(self,
-                      df: pd.Series,
-                      iters: int = 5,
-                      plot: bool = True,
-                      *args,
-                      **kwargs) -> pd.DataFrame:
-        filtered: np.ndarray
-        k_filter: KalmanFilter = KalmanFilter()
-        df: pd.Series
-        i: int
-        filtered = k_filter.filter(np.array(df))[0]
-        for i in range(iters):
-            filtered = k_filter.smooth(filtered)[0]
-        if plot:
-            self.fig.add_trace(
-                Line(
-                    name='kalman filter',
-                    y=filtered.T[0],
-                    line=dict(width=utils.SUB_LINES_WIDTH)), 1, 1)
-        return pd.DataFrame(filtered)
-
-    def scipy_filter(self,
-                     df: pd.Series,
-                     window_length: int = 101,
-                     polyorder: int = 3,
-                     plot: bool = True,
-                     **scipy_savgol_filter_kwargs) -> pd.DataFrame:
-        filtered = signal.savgol_filter(
-            df,
-            window_length=window_length,
-            polyorder=polyorder,
-            **scipy_savgol_filter_kwargs)
-        if plot:
-            self.fig.add_trace(
-                Line(
-                    name='savgol filter',
-                    y=filtered,
-                    line=dict(width=utils.SUB_LINES_WIDTH)), 1, 1)
-        return pd.DataFrame(filtered)
 
     def bull_power(self, periods: int) -> np.ndarray:
         EMA = ta.trend.ema_indicator(self.df['Close'], periods)
@@ -287,18 +229,6 @@ class Trader(object):
         self.returns = []
         SMA1 = ta.trend.sma_indicator(self.df['Close'], fast)
         SMA2 = ta.trend.sma_indicator(self.df['Close'], slow)
-        if plot:
-            self.fig.add_trace(
-                Line(
-                    name=f'SMA{fast}',
-                    y=SMA1.values,
-                    line=dict(width=utils.SUB_LINES_WIDTH, color=utils.GREEN)), 1, 1)
-            self.fig.add_trace(
-                Line(
-                    name=f'SMA{slow}',
-                    y=SMA2.values,
-                    line=dict(width=utils.SUB_LINES_WIDTH, color=utils.RED)), 1, 1)
-
         for SMA13, SMA26 in zip(SMA1, SMA2):
             if SMA26 < SMA13:
                 self.returns.append(utils.BUY)
@@ -319,17 +249,6 @@ class Trader(object):
         SMA1 = ta.trend.sma_indicator(self.df['Close'], fast)
         SMA2 = ta.trend.sma_indicator(self.df['Close'], mid)
         SMA3 = ta.trend.sma_indicator(self.df['Close'], slow)
-
-        if plot:
-            for SMA, Co, name in zip([SMA1, SMA2, SMA3],
-                                     [utils.GREEN, utils.BLUE, utils.RED],
-                                     [fast, mid, slow]):
-                self.fig.add_trace(
-                    Line(
-                        name=f'SMA{name}',
-                        y=SMA.values,
-                        line=dict(width=utils.SUB_LINES_WIDTH, color=Co)), 1, 1)
-
         for SMA13, SMA26, SMA100 in zip(SMA1, SMA2, SMA3):
             if SMA100 < SMA26 < SMA13:
                 self.returns.append(utils.BUY)
@@ -351,15 +270,6 @@ class Trader(object):
         ema3 = ta.trend.ema_indicator(self.df['Close'], fast)
         ema21 = ta.trend.ema_indicator(self.df['Close'], mid)
         ema46 = ta.trend.ema_indicator(self.df['Close'], slow)
-
-        if plot:
-            for ema, Co, name in zip([ema3.values, ema21.values, ema46.values],
-                                     [utils.GREEN, utils.BLUE, utils.RED], [slow, mid, fast]):
-                self.fig.add_trace(
-                    Line(
-                        name=f'SMA{name}',
-                        y=ema,
-                        line=dict(width=utils.SUB_LINES_WIDTH, color=Co)), 1, 1)
 
         for EMA1, EMA2, EMA3 in zip(ema3, ema21, ema46):
             if EMA1 > EMA2 > EMA3:
@@ -394,13 +304,6 @@ class Trader(object):
                           **kwargs) -> utils.PREDICT_TYPE_LIST:
         exp: pd.Series = self.tema(period)
         self.strategy_diff(exp)
-        if plot:
-            self.fig.add_trace(
-                Line(
-                    name=f'EMA{period}',
-                    y=exp.values.T[0],
-                    line=dict(width=utils.SUB_LINES_WIDTH)), 1, 1)
-
         return self.returns
 
     def strategy_rsi(self,
@@ -435,12 +338,6 @@ class Trader(object):
         sarup: np.ndarray = sar.psar_up().values
         self.stop_losses = list(sar.psar().values)
 
-        if plot:
-            for SAR_ in (sarup, sardown):
-                self.fig.add_trace(
-                    Line(
-                        name='SAR', y=SAR_, line=dict(width=utils.SUB_LINES_WIDTH)),
-                    1, 1)
         for price, up, down in zip(
                 list(self.df['Close'].values), list(sarup), list(sardown)):
             numup = np.nan_to_num(up, nan=-9999.0)
@@ -472,189 +369,13 @@ class Trader(object):
                 self.returns.append(utils.SELL)
         return self.returns
 
-    def strategy_regression_model(self, plot: bool = True, *args, **kwargs):  # TODO: fix
-        self.returns = [utils.EXIT for i in range(self._regression_inputs - 1)]
-        data_to_pred: np.ndarray = np.array(
-            utils.get_window(np.array([self.df['Close'].values]).T, self._regression_inputs)
-        ).T
-
-        for e, data in enumerate(data_to_pred):
-            data_to_pred[e] = self.scaler.fit_transform(data)
-        data_to_pred = data_to_pred.T
-
-        predictions = itertools.chain.from_iterable(
-            self.model.predict(data_to_pred))
-        predictions = pd.Series(predictions)
-        frame = predictions
-        predictions = self.strategy_diff(predictions)
-        frame = self.scaler.inverse_transform(frame.values.T).T
-        self.returns = [*self.returns, *predictions]
-        nans = itertools.chain.from_iterable([(np.nan,) * self._regression_inputs])
-        filt = (*nans, *frame.T[0])
-        if plot:
-            self.fig.add_trace(
-                Line(
-                    name='predict',
-                    y=filt,
-                    line=dict(width=utils.SUB_LINES_WIDTH, color=utils.CYAN)),
-                row=1,
-                col=1)
-        return self.returns, filt
-
-    def get_network_regression(self,
-                               dataframes: typing.Iterable[pd.DataFrame],
-                               inputs: int = utils.REGRESSION_INPUTS,
-                               network_save_path: str = './model_regression.h5',
-                               **fit_kwargs) -> Sequential:  # TODO: fix
-        """based on
-        https://medium.com/@randerson112358/stock-price-prediction-using-python-machine-learning-e82a039ac2bb
-        """
-
-        self.model = Sequential()
-        self.model.add(
-            LSTM(units=50, return_sequences=True, input_shape=(inputs, 1)))
-        self.model.add(LSTM(units=50, return_sequences=False))
-        self.model.add(Dense(units=25))
-        self.model.add(Dense(units=1))
-        self.model.compile(optimizer='adam', loss='mean_squared_error')
-
-        self.scaler = MinMaxScaler(feature_range=(0, 1))
-
-        scaled_data: np.ndarray
-        for df in dataframes:
-            scaled_data = self.prepare_scaler(df)
-            train_data = scaled_data[0:len(scaled_data), :]
-            x_train = []
-            y_train = []
-            for i in range(inputs, len(train_data)):
-                x_train.append(train_data[i - inputs:i, 0])
-                y_train.append(train_data[i, 0])
-            x_train, y_train = np.array(x_train), np.array(y_train)
-            x_train = np.reshape(x_train,
-                                 (x_train.shape[0], x_train.shape[1], 1))
-            self.model.fit(x_train, y_train, **fit_kwargs)
-        self.model.save(network_save_path)
-        return self.model
-
-    def prepare_scaler(self,
-                       dataframe: pd.DataFrame,
-                       regression_net: bool = True) -> np.ndarray:  # TODO: fix
-        self.scaler = MinMaxScaler(feature_range=(0, 1))
-        data: pd.DataFrame
-        dataset: np.ndarray
-        if regression_net:
-            data = dataframe.filter(['Close'])
-            dataset = data.values
-        else:
-            dataset = dataframe.values
-        scaled_data: np.ndarray = self.scaler.fit_transform(dataset)
-        return scaled_data
-
-    def get_trained_network(self,
-                            dataframes: typing.Iterable[pd.DataFrame],
-                            filter_: str = 'kalman_filter',
-                            filter_kwargs: Dict[str, typing.Any] = {},
-                            optimizer: str = 'adam',
-                            loss: str = 'mse',
-                            metrics: typing.Iterable[str] = ['mse'],
-                            network_save_path: str = './model_predicting.h5',
-                            **fit_kwargs) -> Tuple[Sequential,
-                                                   Dict[str, List[float]],
-                                                   Tuple[np.ndarray, np.ndarray]]:  # TODO: fix
-        """
-        getting trained neural network to trading.
-        dataframes:  | typing.Iterable[pd.DataFrame] |   list of pandas dataframes with columns:
-            'High'
-            'Low'
-            'Open'
-            'Close'
-            'Volume'
-        optimizer:    |        str         |   optimizer for .compile of network.
-        filter_:      |        str         |    filter for training.
-        filter_kwargs:|       dict         |    named arguments for the filter.
-        loss:         |        str         |   loss for .compile of network.
-        metrics:      |typing.Iterable[str]|   metrics for .compile of network:
-            standard: ['acc']
-        fit_kwargs:   |  *named arguments* |   arguments to .fit of network.
-        returns:
-            (tensorflow model,
-            history of training,
-            (input training data, output train data))
-        """
-
-        list_input: List[pd.DataFrame] = []
-        list_output: List[int] = []
-        flag: pd.DataFrame = self.df
-
-        df: pd.DataFrame
-        filter_kwargs['plot'] = False
-        for df in dataframes:
-            self.df = df
-            all_ta = ta.add_all_ta_features(df, 'Open', 'High', 'Low', 'Close',
-                                            'Volume', True)
-            output1 = self.strategy_diff(
-                self._get_attr(filter_)(**filter_kwargs))
-
-            for output in output1:
-                list_output.append(output[0])
-            list_input.append(
-                pd.DataFrame(
-                    self.prepare_scaler(
-                        pd.DataFrame(all_ta), regression_net=False)))
-        self.df = flag
-        del flag
-        input_df: pd.DataFrame = pd.concat(list_input, axis=0).dropna(1)
-
-        input_train_array: np.ndarray = input_df.values
-        output_train_array: np.ndarray = np.array([list_output]).T
-
-        self.model = Sequential()
-        self.model.add(
-            Dense(20, input_dim=len(input_train_array[0]), activation='tanh'))
-        self.model.add(Dropout(0.3))
-        self.model.add(Dense(1, 'sigmoid'))
-        self.model.compile(optimizer=optimizer, loss=loss, metrics=metrics)
-
-        self.history = self.model.fit(input_train_array, output_train_array, **fit_kwargs)
-        self.training_set = (input_train_array, output_train_array)
-        self.model.save(network_save_path)
-        return self.model, self.history, self.training_set
-
-    def strategy_random_pred(self, *args, **kwargs) -> utils.PREDICT_TYPE_LIST:
-        self.returns = [random.choice([utils.EXIT, utils.SELL, utils.BUY]) for i in range(len(self.df))]
-        return self.returns
-
-    def strategy_with_network(self,
-                              rounding: int = 0,
-                              _rounding_prediction_func=round,
-                              *args,
-                              **kwargs) -> utils.PREDICT_TYPE_LIST:  # TODO: fix
-        """
-        :param rounding: rounding degree for _rounding_prediction_func
-        :param _rounding_prediction_func: A function that will be used to round off the neural network result.
-        """
-        scaler: MinMaxScaler = MinMaxScaler(feature_range=(0, 1))
-        all_ta: np.ndarray = ta.add_all_ta_features(self.df, "Open", 'High', 'Low',
-                                                    'Close', "Volume", True).values
-        preds: np.ndarray = self.model.predict(scaler.fit_transform(all_ta))
-        for e, i in enumerate(preds):
-            preds[e] = _rounding_prediction_func(i[0], rounding)
-        self.returns = list(preds)
-        return self.returns
-
     def strategy_supertrend(self, plot: bool = True, *st_args, **st_kwargs) -> utils.PREDICT_TYPE_LIST:
         st: utils.SuperTrendIndicator = utils.SuperTrendIndicator(self.df['Close'],
                                                                   self.df['High'],
                                                                   self.df['Low'],
                                                                   *st_args,
                                                                   **st_kwargs)
-        if plot:
-            self.fig.add_trace(Line(y=st.get_supertrend_upper(),
-                                    name='supertrend upper',
-                                    line=dict(width=utils.SUB_LINES_WIDTH, color=utils.RED)))
-            self.fig.add_trace(Line(y=st.get_supertrend_lower(),
-                                    name='supertrend lower',
-                                    line=dict(width=utils.SUB_LINES_WIDTH, color=utils.GREEN)))
+
         self.stop_losses = list(st.get_supertrend())
         self.returns = list(st.get_supertrend_strategy_returns())
         self.stop_losses[0] = np.inf if self.returns[0] == utils.SELL else -np.inf
@@ -676,11 +397,6 @@ class Trader(object):
         mid_: pd.Series = bollinger.bollinger_mavg()
         upper: pd.Series = bollinger.bollinger_hband()
         lower: pd.Series = bollinger.bollinger_lband()
-        if plot:
-            name: str
-            TR: pd.Series
-            for TR, name in zip([upper, mid_, lower], ['upper band', 'mid band', 'lower band']):
-                self.fig.add_trace(Line(y=TR, name=name, line=dict(width=utils.SUB_LINES_WIDTH)), col=1, row=1)
         close: float
         up: float
         mid: float
@@ -758,67 +474,45 @@ class Trader(object):
         B: float
         chickou: float
 
-        if plot:
-            for name, data, color in zip(['tenkan-sen',
-                                          'kijun-sen',
-                                          'chinkou-span'],
-                                         [tenkan_sen,
-                                          kinjun_sen,
-                                          chenkou_span],
-                                         ['red',
-                                          'blue',
-                                          'green']):
-                self.fig.add_trace(Line(y=data, name=name, line=dict(width=utils.ICHIMOKU_LINES_WIDTH, color=color)),
-                                   col=1, row=1)
+        self.returns = [utils.EXIT for i in range(chinkouspan)]
+        self.stop_losses = [np.inf] * chinkouspan
+        for e, (close, tenkan, kijun, A, B) in enumerate(zip(
+                prices.values[chinkouspan:],
+                tenkan_sen[chinkouspan:],
+                kinjun_sen[chinkouspan:],
+                senkou_span_a[chinkouspan:],
+                senkou_span_b[chinkouspan:],
+        ), chinkouspan):
+            max_cloud = max((A, B))
+            min_cloud = min((A, B))
 
-            self.fig.add_trace(Line(y=senkou_span_a,
-                                    fill=None,
-                                    line_color=utils.RED,
-                                    ))
-            self.fig.add_trace(Line(
-                y=senkou_span_b,
-                fill='tonexty',
-                line_color=utils.ICHIMOKU_CLOUD_COLOR))
+            stop_loss_adder = stop_loss_plus * (close / 10_000)
 
-            self.returns = [utils.EXIT for i in range(chinkouspan)]
-            self.stop_losses = [np.inf] * chinkouspan
-            for e, (close, tenkan, kijun, A, B) in enumerate(zip(
-                    prices.values[chinkouspan:],
-                    tenkan_sen[chinkouspan:],
-                    kinjun_sen[chinkouspan:],
-                    senkou_span_a[chinkouspan:],
-                    senkou_span_b[chinkouspan:],
-            ), chinkouspan):
-                max_cloud = max((A, B))
-                min_cloud = min((A, B))
+            if not min_cloud < close < max_cloud:
+                if tenkan > kijun:
+                    flag1 = utils.BUY
+                elif tenkan < kijun:
+                    flag1 = utils.SELL
 
-                stop_loss_adder = stop_loss_plus * (close / 10_000)
+                if close > max_cloud:
+                    flag2 = utils.BUY
+                elif close < min_cloud:
+                    flag2 = utils.SELL
 
-                if not min_cloud < close < max_cloud:
-                    if tenkan > kijun:
-                        flag1 = utils.BUY
-                    elif tenkan < kijun:
-                        flag1 = utils.SELL
+                if close > prices[e - chinkouspan]:
+                    flag3 = utils.BUY
+                elif close < prices[e - chinkouspan]:
+                    flag3 = utils.SELL
 
-                    if close > max_cloud:
-                        flag2 = utils.BUY
-                    elif close < min_cloud:
-                        flag2 = utils.SELL
-
-                    if close > prices[e - chinkouspan]:
-                        flag3 = utils.BUY
-                    elif close < prices[e - chinkouspan]:
-                        flag3 = utils.SELL
-
-                    if flag3 == flag1 == flag2:
-                        trade = flag1
-                    if (trade == utils.BUY and flag1 == utils.SELL) or (trade == utils.SELL and flag1 == utils.BUY):
-                        trade = utils.EXIT
-                self.returns.append(trade)
-                if trade == utils.BUY:
-                    self.stop_losses.append(min_cloud - stop_loss_adder)
-                else:
-                    self.stop_losses.append(max_cloud + stop_loss_adder)
+                if flag3 == flag1 == flag2:
+                    trade = flag1
+                if (trade == utils.BUY and flag1 == utils.SELL) or (trade == utils.SELL and flag1 == utils.BUY):
+                    trade = utils.EXIT
+            self.returns.append(trade)
+            if trade == utils.BUY:
+                self.stop_losses.append(min_cloud - stop_loss_adder)
+            else:
+                self.stop_losses.append(max_cloud + stop_loss_adder)
         self.set_open_stop_and_take(set_take=True,
                                     set_stop=False)
         return self.returns
@@ -979,123 +673,8 @@ winrate: {self.winrate}%"""
                 "returns"
             ]).T
         self.backtest_out = self.backtest_out_no_drop.dropna()
-        if plot:
-            loc: pd.Series = self.df[column]
-            self.fig.add_trace(
-                Line(
-                    y=self.backtest_out_no_drop['returns'].values,
-                    line=dict(color=utils.COLOR_DEPOSIT),
-                    name='returns'
-                ),
-                row=3,
-                col=1
-            )
-            self.fig.add_candlestick(
-                close=self.df['Close'],
-                high=self.df['High'],
-                low=self.df['Low'],
-                open=self.df['Open'],
-                row=1,
-                col=1,
-                name=f'{self.ticker} {self.interval}')
-            self.fig.add_trace(
-                Line(
-                    y=self.take_profits,
-                    line=dict(width=utils.TAKE_STOP_OPN_WIDTH, color=utils.GREEN),
-                    opacity=utils.STOP_TAKE_OPN_ALPHA,
-                    name='take profit'),
-                row=1,
-                col=1)
-            self.fig.add_trace(
-                Line(
-                    y=self.stop_losses,
-                    line=dict(width=utils.TAKE_STOP_OPN_WIDTH, color=utils.RED),
-                    opacity=utils.STOP_TAKE_OPN_ALPHA,
-                    name='stop loss'),
-                row=1,
-                col=1)
-            self.fig.add_trace(
-                Line(
-                    y=self.open_lot_prices,
-                    line=dict(width=utils.TAKE_STOP_OPN_WIDTH, color=utils.BLUE),
-                    opacity=utils.STOP_TAKE_OPN_ALPHA,
-                    name='open lot'),
-                row=1,
-                col=1)
-            self.fig.add_trace(
-                Line(
-                    y=self.deposit_history,
-                    line=dict(color=utils.COLOR_DEPOSIT),
-                    name=f'D E P O S I T  (S T A R T: ${money_start})'), 2, 1)
-            self.fig.add_trace(Line(y=self.linear, name='L I N E A R'), 2, 1)
-            preds: Dict[str, List[typing.Union[int, float]]] = {'sellind': [],
-                                                                'exitind': [],
-                                                                'buyind': [],
-                                                                'bprice': [],
-                                                                'sprice': [],
-                                                                'eprice': []}
-            for e, i in enumerate(utils.set_(self.returns)):
-                if i == utils.SELL:
-                    preds['sellind'].append(e)
-                    preds['sprice'].append(loc[e])
-                elif i == utils.BUY:
-                    preds['buyind'].append(e)
-                    preds['bprice'].append(loc[e])
-                elif i == utils.EXIT:
-                    preds['exitind'].append(e)
-                    preds['eprice'].append(loc[e])
-            name: str
-            index: int
-            price: float
-            for name, index, price, triangle_type, color in zip(
-                    ['Buy', 'Sell', 'Exit'],
-                    [preds['buyind'], preds['sellind'], preds['exitind']],
-                    [preds['bprice'], preds['sprice'], preds['eprice']],
-                    ['triangle-up', 'triangle-down', 'triangle-left'],
-                    [utils.GREEN, utils.RED, utils.BLUE]
-            ):
-                self.fig.add_scatter(
-                    mode='markers',
-                    name=name,
-                    y=price,
-                    x=index,
-                    row=1,
-                    col=1,
-                    line=dict(color=color),
-                    marker=dict(
-                        symbol=triangle_type,
-                        size=utils.SCATTER_SIZE,
-                        opacity=utils.SCATTER_ALPHA))
-            if show:
-                self.fig.show()
-        return self.backtest_out
 
-    def set_pyplot(self,
-                   height: int = 900,
-                   width: int = 1300,
-                   template: str = 'plotly_dark',
-                   row_heights: list = [10, 16, 7],
-                   **subplot_kwargs):
-        """
-        :param height: window height
-        :param width: window width
-        :param template: plotly template
-        :param row_heights: standard
-        """
-        self.fig = make_subplots(3, 1, row_heights=row_heights, **subplot_kwargs)
-        self.fig.update_layout(
-            height=height,
-            width=width,
-            template=template,
-            xaxis_rangeslider_visible=False)
-        self.fig.update_xaxes(
-            title_text='T I M E', row=3, col=1, color=utils.TEXT_COLOR)
-        self.fig.update_yaxes(
-            title_text='M O N E Y S', row=2, col=1, color=utils.TEXT_COLOR)
-        self.fig.update_yaxes(
-            title_text='R E T U R N S', row=3, col=1, color=utils.TEXT_COLOR)
-        self.fig.update_yaxes(
-            title_text='D A T A', row=1, col=1, color=utils.TEXT_COLOR)
+        return self.backtest_out
 
     def strategy_collider(self,
                           first_returns: utils.PREDICT_TYPE_LIST,
@@ -1363,21 +942,6 @@ winrate: {self.winrate}%"""
             utils.logger.critical('error :(', exc_info=True)
             raise e
 
-    def log_data(self, *args, **kwargs):
-        self.fig.update_yaxes(row=1, col=1, type='log')
-        utils.logger.info('trader log data')
-
-    def log_deposit(self, *args, **kwargs):
-        self.fig.update_yaxes(row=2, col=1, type='log')
-        utils.logger.info('trader log deposit')
-
-    def log_returns(self, *args, **kwargs):
-        self.fig.update_yaxes(row=3, col=1, type='log')
-        utils.logger.info('trader log returns')
-
-    def load_model(self, path: str, *args, **kwargs):
-        self.model = load_model(path)
-
     def set_client(self, your_client: brokers.TradingClient, *args, **kwargs):
         """
         :param your_client: trading client
@@ -1567,76 +1131,3 @@ winrate: {self.winrate}%"""
             else:
                 ret.append(False)
         return ret
-
-    def find_all_talib_paterns(self, *args, **kwargs):
-        open_ = self.df['Open']
-        high = self.df['High']
-        low = self.df['Low']
-        close = self.df['Close']
-
-        patterns = map(utils.ta_lib_collider_all, [
-            talib.CDL2CROWS(open_, high, low, close),
-            talib.CDL3BLACKCROWS(open_, high, low, close),
-            talib.CDL3INSIDE(open_, high, low, close),
-            talib.CDL3LINESTRIKE(open_, high, low, close),
-            talib.CDL3OUTSIDE(open_, high, low, close),
-            talib.CDL3STARSINSOUTH(open_, high, low, close),
-            talib.CDL3WHITESOLDIERS(open_, high, low, close),
-            talib.CDLABANDONEDBABY(open_, high, low, close),
-            talib.CDLADVANCEBLOCK(open_, high, low, close),
-            talib.CDLBELTHOLD(open_, high, low, close),
-            talib.CDLBREAKAWAY(open_, high, low, close),
-            talib.CDLCLOSINGMARUBOZU(open_, high, low, close),
-            talib.CDLCONCEALBABYSWALL(open_, high, low, close),
-            talib.CDLCOUNTERATTACK(open_, high, low, close),
-            talib.CDLDARKCLOUDCOVER(open_, high, low, close),
-            talib.CDLDOJI(open_, high, low, close),
-            talib.CDLDOJISTAR(open_, high, low, close),
-            talib.CDLDRAGONFLYDOJI(open_, high, low, close),
-            talib.CDLENGULFING(open_, high, low, close),
-            talib.CDLEVENINGDOJISTAR(open_, high, low, close),
-            talib.CDLEVENINGSTAR(open_, high, low, close),
-            talib.CDLGAPSIDESIDEWHITE(open_, high, low, close),
-            talib.CDLGRAVESTONEDOJI(open_, high, low, close),
-            talib.CDLHAMMER(open_, high, low, close),
-            talib.CDLHANGINGMAN(open_, high, low, close),
-            talib.CDLHARAMI(open_, high, low, close),
-            talib.CDLHARAMICROSS(open_, high, low, close),
-            talib.CDLHIGHWAVE(open_, high, low, close),
-            talib.CDLHIKKAKE(open_, high, low, close),
-            talib.CDLHIKKAKEMOD(open_, high, low, close),
-            talib.CDLHOMINGPIGEON(open_, high, low, close),
-            talib.CDLIDENTICAL3CROWS(open_, high, low, close),
-            talib.CDLINNECK(open_, high, low, close),
-            talib.CDLINVERTEDHAMMER(open_, high, low, close),
-            talib.CDLKICKING(open_, high, low, close),
-            talib.CDLKICKINGBYLENGTH(open_, high, low, close),
-            talib.CDLLADDERBOTTOM(open_, high, low, close),
-            talib.CDLLONGLEGGEDDOJI(open_, high, low, close),
-            talib.CDLLONGLINE(open_, high, low, close),
-            talib.CDLMARUBOZU(open_, high, low, close),
-            talib.CDLMATCHINGLOW(open_, high, low, close),
-            talib.CDLMATHOLD(open_, high, low, close),
-            talib.CDLMORNINGDOJISTAR(open_, high, low, close),
-            talib.CDLMORNINGSTAR(open_, high, low, close),
-            talib.CDLONNECK(open_, high, low, close),
-            talib.CDLPIERCING(open_, high, low, close),
-            talib.CDLRICKSHAWMAN(open_, high, low, close),
-            talib.CDLRISEFALL3METHODS(open_, high, low, close),
-            talib.CDLSEPARATINGLINES(open_, high, low, close),
-            talib.CDLSHOOTINGSTAR(open_, high, low, close),
-            talib.CDLSHORTLINE(open_, high, low, close),
-            talib.CDLSPINNINGTOP(open_, high, low, close),
-            talib.CDLSTALLEDPATTERN(open_, high, low, close),
-            talib.CDLSTICKSANDWICH(open_, high, low, close),
-            talib.CDLTAKURI(open_, high, low, close),
-            talib.CDLTASUKIGAP(open_, high, low, close),
-            talib.CDLTHRUSTING(open_, high, low, close),
-            talib.CDLTRISTAR(open_, high, low, close),
-            talib.CDLUNIQUE3RIVER(open_, high, low, close),
-            talib.CDLUPSIDEGAP2CROWS(open_, high, low, close),
-            talib.CDLXSIDEGAP3METHODS(open_, high, low, close)
-        ])
-
-        patterns = map(utils.anti_set_, patterns)
-        return self.multi_strategy_collider(*patterns, mode='super')
